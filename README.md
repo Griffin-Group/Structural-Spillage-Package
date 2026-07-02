@@ -5,7 +5,7 @@ This work builds off Structural spillage: an efficient method to identify non-cr
 The quasi-Bloch structural spillage at UC k-point **k** (paper eq. 2b):
 
 $$
-\gamma_{\mathrm{qB}}(\mathbf{k}) = \frac{1}{2}\left\{ \left[\sum_{G\alpha} P^{\alpha\alpha}_{\mathbf{k+G},\,\mathbf{k+G}}\right] + \tilde{n}_{\mathrm{occ}}(\mathbf{k}) - \sum_{G\alpha}\sum_{G'\beta}\left[P^{\alpha\beta}_{\mathbf{k+G},\,\mathbf{k+G'}}\,\tilde{P}^{\beta\alpha}_{\mathbf{k+G'},\,\mathbf{k+G}} + \tilde{P}^{\alpha\beta}_{\mathbf{k+G},\,\mathbf{k+G'}}\,P^{\beta\alpha}_{\mathbf{k+G'},\,\mathbf{k+G}}\right] \right\}
+\gamma_{\mathrm{qB}}(\mathbf{k}) = \frac{1}{2}\left\lbrace \left[\sum_{G\alpha} P^{\alpha\alpha}_{\mathbf{k+G},\mathbf{k+G}}\right] + \tilde{n}_{\mathrm{occ}}(\mathbf{k}) - \sum_{G\alpha}\sum_{G'\beta}\left[P^{\alpha\beta}_{\mathbf{k+G},\mathbf{k+G'}}\tilde{P}^{\beta\alpha}_{\mathbf{k+G'},\mathbf{k+G}} + \tilde{P}^{\alpha\beta}_{\mathbf{k+G},\mathbf{k+G'}}P^{\beta\alpha}_{\mathbf{k+G'},\mathbf{k+G}}\right] \right\rbrace
 $$
 
 where $P$ is the occupied-subspace projector of the crystalline reference (`--xtal-sc`) and $\tilde{P}$ is the projector of the comparison system (`--amor-sc`), both expressed in the plane-wave basis and unfolded onto the UC k-mesh (`--xtal-uc`). This is implemented in `compute_structural_spillage` in `structural_spillage.py`: `p4` is $\sum_{G\alpha} P^{\alpha\alpha}$, `aa` is $\tilde{n}_{\mathrm{occ}}(\mathbf{k})$, and `p1`/`p2` are the two cross terms $P\tilde{P}$ and $\tilde{P}P$.
