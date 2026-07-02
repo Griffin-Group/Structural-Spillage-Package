@@ -4,6 +4,11 @@ onto the crystalline UC k-mesh.
 
 import argparse
 
+import numpy as np
+
+from utils import _detect_N
+from wavecar_io import load_sc_wavecar, load_uc_kmesh
+
 
 def parse_args():
     p = argparse.ArgumentParser(
@@ -75,10 +80,61 @@ def main():
     args = parse_args()
 
     # ── load UC k-mesh ────────────────────────────────────────────────────
-    # wavecar_io.load_uc_kmesh(args.xtal_uc, vasp_type='ncl' if args.uc_soc else 'std')
+    print("Loading UC WAVECAR...")
+    uc = load_uc_kmesh(args.xtal_uc, vasp_type='ncl' if args.uc_soc else 'std')
+    N1 = _detect_N(uc.kpoints[:, 0], args.n1)
+    N2 = _detect_N(uc.kpoints[:, 1], args.n2)
+    N3 = _detect_N(uc.kpoints[:, 2], args.n3)
+    print(f"  Supercell repeats: N1={N1}, N2={N2}, N3={N3}")
+    b_amorph = np.array([uc.b[0] / N1, uc.b[1] / N2, uc.b[2] / N3])
+    print(f"  UC k-points ({len(uc.kpoints)}): first few = "
+          f"{[list(k) for k in uc.kpoints[:4]]}{'...' if len(uc.kpoints) > 4 else ''}")
+    print(f"  UC pw at gamma (k-pt 0): {uc.n_pw_gamma}")
 
     # ── load SC WAVECARs (xtal-SC, amor-SC, optional xtal-SC-noSOC) ───────
-    # wavecar_io.load_sc_wavecar(...) for each
+    print(f"Loading SC B WAVECAR ({'SOC/ncl' if args.amor_ncl else 'noSOC/std'})...")
+    amor = load_sc_wavecar(args.amor_sc, vasp_type='ncl' if args.amor_ncl else 'std')
+    print(f"  noSOC gap: {amor.gap * 1000:.1f} meV")
+    if amor.gap < 0.01:
+        print(f"WARNING: noSOC system gap too small ({amor.gap * 1000:.1f} meV) — system may not be insulating")
+    print(f"  SC_amor pw at gamma: {amor.n_pw_gamma}")
+
+    print("Loading SOC SC WAVECAR (largest)...")
+    xtal = load_sc_wavecar(args.xtal_sc, vasp_type='ncl')
+    print(f"  SOC gap: {xtal.gap * 1000:.1f} meV")
+    assert xtal.gap > 0.01, f"SOC system gap too small ({xtal.gap:.4f} eV) — may not be insulating"
+    print(f"  SC_xtal pw at gamma: {xtal.n_pw_gamma}")
+
+    xtal_nosoc = None
+    if args.xtal_sc_nosoc is not None:
+        print("Loading noSOC xtal SC WAVECAR...")
+        xtal_nosoc = load_sc_wavecar(args.xtal_sc_nosoc, vasp_type='std')
+        print(f"  noSOC xtal gap: {xtal_nosoc.gap * 1000:.1f} meV")
+        assert xtal_nosoc.gap > 0.01, f"noSOC xtal gap too small ({xtal_nosoc.gap:.4f} eV)"
+        assert xtal_nosoc.n_pw_gamma == xtal.n_pw_gamma, \
+            f"noSOC xtal n_pw ({xtal_nosoc.n_pw_gamma}) != SOC xtal n_pw ({xtal.n_pw_gamma}) — check ENCUT"
+
+    N_OCC = int(round(np.sum(amor.occs)))
+    N_OCC_SOC = int(round(np.sum(xtal.occs)))
+    print(f"Occupied bands — noSOC: {N_OCC} per spin, SOC: {N_OCC_SOC} total")
+
+    # ── lattice / geometry diagnostics ──────────────────────────────────────
+    print("Lattice diagnostics:")
+    uc_lens = np.linalg.norm(uc.a, axis=1)
+    # element-wise ratio (NaN for zero-component hex lattice vectors is expected)
+    print(f"  SC_xtal / UC ratio (element-wise):\n{xtal.a / uc.a}")
+    print(f"  SC_amor / UC ratio (element-wise):\n{amor.a / uc.a}")
+    # norm-based ratio avoids NaN — should be [N1, N2, N3]
+    print(f"  SC_xtal / UC lattice vector lengths: {np.linalg.norm(xtal.a, axis=1) / uc_lens}")
+    print(f"  SC_amor / UC lattice vector lengths: {np.linalg.norm(amor.a, axis=1) / uc_lens}")
+    print(f"  b_SC_amor vs b_amorph (b_UC/N) max abs diff: {np.max(np.abs(amor.b - b_amorph)):.3e}")
+    print(f"  b_SC_xtal vs b_amorph max abs diff: {np.max(np.abs(xtal.b - b_amorph)):.3e}")
+
+    # ── sanity check: SC xtal and SC amor must agree (both are gamma-point SCs)
+    print(f"Plane waves — SC_xtal: {xtal.n_pw_gamma}, SC_amor: {amor.n_pw_gamma}, "
+          f"UC total: {sum(uc.index_list)}")
+    assert xtal.n_pw_gamma == amor.n_pw_gamma, \
+        f"SC xtal ({xtal.n_pw_gamma}) != SC amor ({amor.n_pw_gamma}) — incompatible calculations"
 
     # ── match UC plane waves onto SC plane waves ───────────────────────────
     # kmatching.match_uc_to_sc(...)
