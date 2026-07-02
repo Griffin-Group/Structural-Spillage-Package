@@ -6,6 +6,7 @@ import argparse
 
 import numpy as np
 
+from kmatching import match_uc_to_sc
 from utils import _detect_N
 from wavecar_io import load_sc_wavecar, load_uc_kmesh
 
@@ -137,7 +138,12 @@ def main():
         f"SC xtal ({xtal.n_pw_gamma}) != SC amor ({amor.n_pw_gamma}) — incompatible calculations"
 
     # ── match UC plane waves onto SC plane waves ───────────────────────────
-    # kmatching.match_uc_to_sc(...)
+    # p_amorph: SC gamma-point G+k vectors, Cartesian (uses the amorphous
+    # SC's own reciprocal lattice, matching kmatching's expectation that
+    # both p_amorph and p_full are expressed in the same basis).
+    p_amorph = amor.Gpoints_gamma @ amor.b + amor.kpoint_gamma @ amor.b
+    sortidx, index_list, n_matched = match_uc_to_sc(
+        p_amorph, uc.p_full, amor.b, uc.index_list, xtal.n_pw_gamma)
 
     # ── build spinor bases and compute plane-wave spillage ─────────────────
 
