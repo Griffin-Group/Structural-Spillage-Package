@@ -282,11 +282,9 @@ def main():
     uc, amor, xtal, xtal_nosoc, sortidx, index_list, N_OCC, N_OCC_SOC = load_inputs(args)
     compute_structural_spillage(amor, xtal, sortidx, index_list, uc.kpoints, N_OCC, N_OCC_SOC, args)
 
-    # ── optional per-band outputs ───────────────────────────────────────────
+    # ── optional per-band outputs — not yet implemented ─────────────────────
 
-    # ── Appendix D: spin-orbit plane-wave spillage (if --amor-soc given) ───
-
-    raise NotImplementedError
+    # ── Appendix D: spin-orbit plane-wave spillage — not yet implemented ────
 
 
 if __name__ == '__main__':
