@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# local test run outputs (WAVECAR inputs live outside the repo; these are
+# generated artifacts from smoke-testing against them)
+/tests/
+
+# local copies of test WAVECARs staged for offline/outage backup — not for git
+/test_data/
