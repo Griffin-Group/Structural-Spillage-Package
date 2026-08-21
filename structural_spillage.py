@@ -128,6 +128,8 @@ def parse_args():
                                'fraction of the occupied subspace not reproduced, roughly in [0,1]')
     outputs.add_argument('--out-sopw', default='sopw_spillage.txt',
                           help='Output: per-PW spin-orbit spillage (Appendix D, only written if --amor-soc is given)')
+    outputs.add_argument('--out-norm-sopw', default='sopw_norm.txt',
+                          help='Output: scalar normalized sopw = total_sopw / N_occ (Appendix D)')
     outputs.add_argument('--out-per-band-sopw', default=None,
                           help='Output: per-band spin-orbit spillage — rows are amor SOC bands, '
                                'columns are [energy_eV, gamma_sopw]. '
@@ -397,15 +399,108 @@ def compute_structural_spillage(amor, xtal, sortidx, index_list, uc_kpoints, N_O
     return qB_spillage
 
 
+def compute_sopw(amor, amor_soc, sortidx, index_list, args):
+    """Appendix D spin-orbit plane-wave spillage: compares the occupied
+    subspaces of --amor-soc and --amor-sc (noSOC) — SOC on/off calculations
+    of the SAME structure — with no UC k-block restriction, unlike
+    compute_structural_spillage's gamma_qB(k), which compares two DIFFERENT
+    structures and restricts cross terms to matching UC k-blocks. See the
+    README for the full derivation of why these are different quantities.
+
+    Writes `args.out_sopw` (per plane wave) and `args.out_norm_sopw`
+    (scalar, total/N_occ). If `args.out_per_band_sopw` is set, also writes
+    the band-resolved version via `per_band_structural_spillage`.
+    """
+    print("\n── Appendix D: spin-orbit plane-wave spillage ──────────────────────────")
+    n_pw = amor.n_pw_gamma
+    vsa = 2 * n_pw
+
+    assert not amor.ispin2, "SOPW trivial embedding currently only supports ISPIN=1 --amor-sc"
+    coeff_a = select_gamma_coeffs(amor.coeffs, amor.ispin2)[0]   # (n_bands, n_pw)
+    occ_bands_nsoc = np.where(amor.occs == 1.0)[0]
+    N_OCC_NSOC = len(occ_bands_nsoc)
+
+    coeff_soc = first_kpoint_coeffs(amor_soc.coeffs)
+    occ_bands_soc = np.where(amor_soc.occs == 1.0)[0]
+    N_OCC_SOC = len(occ_bands_soc)
+    print(f"  Amor SOC:   {N_OCC_SOC} occupied bands, n_pw={n_pw}")
+    print(f"  Amor noSOC: {N_OCC_NSOC} occupied bands, n_pw={n_pw}")
+
+    # If ranks don't match the expected 2x (disorder pushes in-gap states across
+    # E_F), truncate the SOC side and warn — mirrors the same pattern used for
+    # the xtal/amor rank check in compute_structural_spillage.
+    if N_OCC_SOC != 2 * N_OCC_NSOC:
+        n_min = min(N_OCC_SOC, 2 * N_OCC_NSOC)
+        print(f"WARNING: amor SOC bands ({N_OCC_SOC}) != 2×noSOC ({N_OCC_NSOC}); "
+              f"truncating SOC to {n_min} (likely in-gap states near E_F).")
+        occ_bands_soc = occ_bands_soc[:n_min]
+        N_OCC_SOC = n_min
+
+    # native NCL spinors, kept raw (pre-orthonormalization) for the per-band output
+    soc_raw = np.stack([coeff_soc[j] for j in occ_bands_soc])   # (N_OCC_SOC, 2, n_pw)
+    soc_energies = amor_soc.energies[occ_bands_soc]
+
+    # trivial embedding: band n -> [psi_n, 0] (idx), band n -> [0, psi_n] (idx+N_OCC_NSOC)
+    nsoc_raw = np.zeros((2 * N_OCC_NSOC, 2, n_pw), dtype=complex)
+    for idx, j in enumerate(occ_bands_nsoc):
+        psi = coeff_a[j]
+        nsoc_raw[idx, 0, :] = psi
+        nsoc_raw[idx + N_OCC_NSOC, 1, :] = psi
+
+    Qsoc, nsoc = orth(soc_raw.reshape(N_OCC_SOC, vsa).T)
+    P_soc = (Qsoc.T).reshape((nsoc, 2, n_pw))
+    Qnsoc, nnsoc = orth(nsoc_raw.reshape(2 * N_OCC_NSOC, vsa).T)
+    P_nsoc = (Qnsoc.T).reshape((nnsoc, 2, n_pw))
+
+    print(f"  Retained vectors — SOC: {nsoc}, noSOC: {nnsoc}, expected: {N_OCC_SOC}")
+    if not (nsoc == nnsoc == N_OCC_SOC):
+        n_min = min(nsoc, nnsoc, N_OCC_SOC)
+        print(f"WARNING: SOPW rank mismatch (SOC={nsoc}, noSOC={nnsoc}, expected={N_OCC_SOC}); "
+              f"truncating to {n_min}.")
+        P_soc, P_nsoc = P_soc[:n_min], P_nsoc[:n_min]
+        nsoc = nnsoc = N_OCC_SOC = n_min
+
+    P_soc_c  = np.conj(P_soc)
+    P_nsoc_c = np.conj(P_nsoc)
+
+    w1_check = np.einsum('nba, nba ->', P_soc, P_soc_c)
+    w2_check = np.einsum('nba, nba ->', P_nsoc, P_nsoc_c)
+    print(f"  Tr[P_soc]  = {np.real(w1_check):.4f}, expected {N_OCC_SOC}")
+    print(f"  Tr[P_nsoc] = {np.real(w2_check):.4f}, expected {N_OCC_SOC}")
+
+    print("Computing spin-orbit plane-wave spillage...")
+    # No UC k-block restriction — G' is summed over the full plane-wave basis
+    # unconditionally, unlike compute_structural_spillage's per-block loop.
+    w1 = np.einsum('nap, nbg, mbg, map -> p', P_soc,  P_soc_c,  P_soc,  P_soc_c,  optimize="optimal")
+    w2 = np.einsum('nap, nbg, mbg, map -> p', P_nsoc, P_nsoc_c, P_nsoc, P_nsoc_c, optimize="optimal")
+    w3 = np.einsum('nap, nbg, mbg, map -> p', P_soc,  P_soc_c,  P_nsoc, P_nsoc_c, optimize="optimal")
+    w4 = np.einsum('nap, nbg, mbg, map -> p', P_nsoc, P_nsoc_c, P_soc,  P_soc_c,  optimize="optimal")
+
+    gamma_sopw = 0.5 * np.real(w1) + 0.5 * np.real(w2) - 0.5 * np.real(w3) - 0.5 * np.real(w4)
+    total_sopw = np.sum(gamma_sopw)
+    norm_sopw  = total_sopw / N_OCC_SOC
+
+    print(f"  Spin-orbit PW spillage (Appendix D): {total_sopw:.6f}")
+    print(f"  Normalized sopw (total / N_occ): {norm_sopw:.6f}  (max=1 if SOC fully reshapes subspace)")
+    np.savetxt(args.out_sopw, gamma_sopw)
+    np.savetxt(args.out_norm_sopw, [norm_sopw])
+
+    if args.out_per_band_sopw is not None:
+        print("Computing per-band spin-orbit spillage...")
+        per_band_structural_spillage(soc_raw, soc_energies, P_nsoc[:, :, sortidx], sortidx, index_list,
+                                      args.out_per_band_sopw, 'gamma_sopw')
+
+    return gamma_sopw
+
+
 def main():
     args = parse_args()
     uc, amor, xtal, xtal_nosoc, amor_soc, sortidx, index_list, N_OCC, N_OCC_SOC = load_inputs(args)
     compute_structural_spillage(amor, xtal, sortidx, index_list, uc.kpoints, N_OCC, N_OCC_SOC, args,
                                  xtal_nosoc=xtal_nosoc, amor_soc=amor_soc)
 
-    # ── per-band spin-orbit spillage (--out-per-band-sopw) — not yet implemented ──
-
-    # ── Appendix D: spin-orbit plane-wave spillage — not yet implemented ────
+    if amor_soc is not None:
+        compute_sopw(amor, amor_soc, sortidx, index_list, args)
 
 
 if __name__ == '__main__':

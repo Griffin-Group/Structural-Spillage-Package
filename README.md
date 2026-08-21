@@ -1,7 +1,7 @@
 # Structural-Spillage-Package
 This work builds off Structural spillage: an efficient method to identify non-crystalline topological materials (https://link.aps.org/doi/10.1103/PhysRevResearch.5.L042011) with a more efficient implementation of the structural spillage calculations.
 
-Note, this is only an indicator of band inversion in the perturbative limit of a crystalline structure. Work is ongoing to quantify when it is indicative.
+Note, this is only an indicator of band inversion in the perturbative limit of a crystalline structure. Work is ongoing to quantify what this limit is (e.g. in terms of local atomic environments/orbitals).
 
 ## Method
 The quasi-Bloch structural spillage at UC k-point **k** (paper eq. 2b):
@@ -12,9 +12,9 @@ $$
 
 where $P$ is the occupied-subspace projector of the crystalline reference (`--xtal-sc`) and $\tilde{P}$ is the projector of the comparison system (`--amor-sc`), both expressed in the plane-wave basis and unfolded onto the UC k-mesh (`--xtal-uc`). This is implemented in `compute_structural_spillage` in `structural_spillage.py`: `p4` is $\sum_{G\alpha} P^{\alpha\alpha}$, `aa` is $\tilde{n}_{\mathrm{occ}}(\mathbf{k})$, and `p1`/`p2` are the two cross terms $P\tilde{P}$ and $\tilde{P}P$.
 
-$\gamma_{\mathrm{qB}}(\mathbf{k})$ itself (the structural spillage from the paper) and the
-per-band structural spillage below are implemented. The per-band spin-orbit spillage and the
-Appendix D spin-orbit plane-wave spillage are not yet implemented.
+$\gamma_{\mathrm{qB}}(\mathbf{k})$ itself (the structural spillage from the paper), the
+per-band structural spillage, and the spin-orbit plane-wave spillage (Appendix D, aggregate
+and per-band) below are all implemented.
 
 ## Per-band structural spillage
 Rather than the aggregate $\gamma_{\mathrm{qB}}(\mathbf{k})$ above, `per_band_structural_spillage`
@@ -46,9 +46,7 @@ A different quantity from $\gamma_{\mathrm{qB}}(\mathbf{k})$ above, despite the 
 Where the structural spillage compares two *different* structures (`--xtal-sc` vs
 `--amor-sc`) and restricts cross terms to plane waves mapping to the *same* UC k-point,
 the spin-orbit plane-wave spillage compares SOC vs noSOC calculations of the *same* structure
-(`--amor-soc` vs `--amor-sc`) with no such restriction — the sum runs over the full plane-wave
-basis unconditionally, appropriate since a disordered structure has no crystalline momentum to
-restrict by in the first place:
+(`--amor-soc` vs `--amor-sc`).
 
 $$
 \gamma_{\mathrm{sopw}}(\mathbf{G}) = \frac{1}{2}\left\lbrace Q^{\alpha\alpha}_{\mathbf{G},\mathbf{G}} + \tilde{Q}^{\alpha\alpha}_{\mathbf{G},\mathbf{G}} - \sum_{\mathbf{G}'\alpha\beta}\left[Q^{\alpha\beta}_{\mathbf{G},\mathbf{G}'}\tilde{Q}^{\beta\alpha}_{\mathbf{G}',\mathbf{G}} + \tilde{Q}^{\alpha\beta}_{\mathbf{G},\mathbf{G}'}Q^{\beta\alpha}_{\mathbf{G}',\mathbf{G}}\right] \right\rbrace
@@ -57,10 +55,10 @@ $$
 where $Q$ is the occupied-subspace projector of `--amor-soc` and $\tilde{Q}$ is the projector
 of `--amor-sc` (noSOC) — both projectors on the same structure, differing only in whether SOC
 was included. The total spin-orbit spillage is $\sum_{\mathbf{G}} \gamma_{\mathrm{sopw}}(\mathbf{G})$
-(`--out-sopw`), normalized by $N_{\mathrm{occ}}$ for `--out-norm-sopw`. A large value signals
-that turning on SOC substantially reshapes the occupied subspace — the signature of SOC-driven
-band inversion. Not yet implemented (see `--out-per-band-sopw` for the intended band-resolved
-version, comparing individual `--amor-soc` bands against the `--amor-sc` subspace).
+(`--out-sopw`), normalized by $N_{\mathrm{occ}}$ for `--out-norm-sopw`. `compute_sopw` runs automatically whenever `--amor-soc` is given (alongside
+`compute_structural_spillage`), and additionally writes `--out-per-band-sopw` — rows are
+`--amor-soc` bands, columns `[energy_eV, gamma_sopw, w_k0, ..., dominant_k]` — if that flag
+is set, comparing individual `--amor-soc` bands against the `--amor-sc` subspace.
 
 ## Requirements
 Python 3.9+ (uses the walrus operator). Install dependencies with:
@@ -104,9 +102,10 @@ python structural_spillage.py \
 ```
 We confirm that the value at the $\Gamma$ point (2.7) matches pymatgen spin orbit spillage.
 
-### Bismuthene bi-layer (per-band)
+### Bismuthene bi-layer (per-band + SOPW)
 The bismuthene case above only exercises `--out-spillage`. With two more WAVECARs it also
-covers all three per-band outputs:
+covers all three per-band structural outputs, and — since `--amor-soc` is now present —
+`compute_sopw` runs automatically too, covering the Appendix D outputs in the same command:
 
 - `supercell_nosoc/WAVECAR` — noSOC on the same crystalline `supercell/` structure
   (generated via `submit_bi_xtal_nosoc.sh` in `AmorphousTDA`)
@@ -122,9 +121,13 @@ python structural_spillage.py \
   --amor-sc       test_data/Bi_data/dis/WAVECAR \
   --amor-soc      test_data/Bi_data/dis_soc/WAVECAR \
   --out-spillage           tests/bi_smoke/spillage.txt \
+  --out-norm-spillage      tests/bi_smoke/spillage_norm.txt \
   --out-per-band           tests/bi_smoke/per_band_struct_soc_nsoc.txt \
   --out-per-band-nosoc     tests/bi_smoke/per_band_struct_nosoc_nsoc.txt \
-  --out-per-band-nosoc-soc tests/bi_smoke/per_band_struct_nosoc_soc.txt
+  --out-per-band-nosoc-soc tests/bi_smoke/per_band_struct_nosoc_soc.txt \
+  --out-sopw               tests/bi_smoke/sopw.txt \
+  --out-norm-sopw          tests/bi_smoke/sopw_norm.txt \
+  --out-per-band-sopw      tests/bi_smoke/per_band_sopw.txt
 ```
 
 Deep valence bands score lowest (least impacted SOC/noSOC and crystal/disorder); states nearest $E_F$ score highest, as
