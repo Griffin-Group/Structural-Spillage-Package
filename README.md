@@ -1,6 +1,8 @@
 # Structural-Spillage-Package
 This work builds off Structural spillage: an efficient method to identify non-crystalline topological materials (https://link.aps.org/doi/10.1103/PhysRevResearch.5.L042011) with a more efficient implementation of the structural spillage calculations.
 
+Note, this is only an indicator of band inversion in the perturbative limit of a crystalline structure. Work is ongoing to quantify when it is indicative.
+
 ## Method
 The quasi-Bloch structural spillage at UC k-point **k** (paper eq. 2b):
 
@@ -38,6 +40,27 @@ subspace are used:
 | `--out-per-band` | `--xtal-sc` (SOC) | `--amor-sc` | — |
 | `--out-per-band-nosoc` | `--xtal-sc-nosoc`, trivially embedded as $[\psi_n, 0]$ | `--amor-sc` | `--xtal-sc-nosoc` |
 | `--out-per-band-nosoc-soc` | `--xtal-sc-nosoc`, trivially embedded as $[\psi_n, 0]$ | `--amor-soc` | `--xtal-sc-nosoc`, `--amor-soc` |
+
+## Spin-orbit plane-wave spillage (Appendix D)
+A different quantity from $\gamma_{\mathrm{qB}}(\mathbf{k})$ above, despite the similar form.
+Where the structural spillage compares two *different* structures (`--xtal-sc` vs
+`--amor-sc`) and restricts cross terms to plane waves mapping to the *same* UC k-point,
+the spin-orbit plane-wave spillage compares SOC vs noSOC calculations of the *same* structure
+(`--amor-soc` vs `--amor-sc`) with no such restriction — the sum runs over the full plane-wave
+basis unconditionally, appropriate since a disordered structure has no crystalline momentum to
+restrict by in the first place:
+
+$$
+\gamma_{\mathrm{sopw}}(\mathbf{G}) = \frac{1}{2}\left\lbrace Q^{\alpha\alpha}_{\mathbf{G},\mathbf{G}} + \tilde{Q}^{\alpha\alpha}_{\mathbf{G},\mathbf{G}} - \sum_{\mathbf{G}'\alpha\beta}\left[Q^{\alpha\beta}_{\mathbf{G},\mathbf{G}'}\tilde{Q}^{\beta\alpha}_{\mathbf{G}',\mathbf{G}} + \tilde{Q}^{\alpha\beta}_{\mathbf{G},\mathbf{G}'}Q^{\beta\alpha}_{\mathbf{G}',\mathbf{G}}\right] \right\rbrace
+$$
+
+where $Q$ is the occupied-subspace projector of `--amor-soc` and $\tilde{Q}$ is the projector
+of `--amor-sc` (noSOC) — both projectors on the same structure, differing only in whether SOC
+was included. The total spin-orbit spillage is $\sum_{\mathbf{G}} \gamma_{\mathrm{sopw}}(\mathbf{G})$
+(`--out-sopw`), normalized by $N_{\mathrm{occ}}$ for `--out-norm-sopw`. A large value signals
+that turning on SOC substantially reshapes the occupied subspace — the signature of SOC-driven
+band inversion. Not yet implemented (see `--out-per-band-sopw` for the intended band-resolved
+version, comparing individual `--amor-soc` bands against the `--amor-sc` subspace).
 
 ## Requirements
 Python 3.9+ (uses the walrus operator). Install dependencies with:
@@ -89,9 +112,6 @@ covers all three per-band outputs:
   (generated via `submit_bi_xtal_nosoc.sh` in `AmorphousTDA`)
 - `dis_soc/WAVECAR` — SOC on the same disordered `dis/` structure
   (generated via `submit_bi_dis_soc.sh`)
-
-Local copies of both live in `test_data/Bi_data/{supercell_nosoc,dis_soc}/WAVECAR`, alongside
-the other three, and are what the command below uses.
 
 ```
 python structural_spillage.py \

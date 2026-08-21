@@ -123,6 +123,9 @@ def parse_args():
     outputs = p.add_argument_group('output files')
     outputs.add_argument('--out-spillage', default='spillage.txt',
                           help='Output: raw spillage per UC k-point')
+    outputs.add_argument('--out-norm-spillage', default='spillage_norm.txt',
+                          help='Output: spillage per UC k-point normalized by N_occ(k) — '
+                               'fraction of the occupied subspace not reproduced, roughly in [0,1]')
     outputs.add_argument('--out-sopw', default='sopw_spillage.txt',
                           help='Output: per-PW spin-orbit spillage (Appendix D, only written if --amor-soc is given)')
     outputs.add_argument('--out-per-band-sopw', default=None,
@@ -360,6 +363,9 @@ def compute_structural_spillage(amor, xtal, sortidx, index_list, uc_kpoints, N_O
     gamma_idx = int(np.argmin(np.linalg.norm(uc_kpoints, axis=1)))
     print(f"  Γ-point spillage: {qB_spillage[gamma_idx]:.4f}  N_occ(Γ)={qB_nocc[gamma_idx]:.1f}")
     np.savetxt(args.out_spillage, qB_spillage)
+
+    qB_norm = [s / n for s, n in zip(qB_spillage, qB_nocc)]
+    np.savetxt(args.out_norm_spillage, qB_norm)
 
     if args.out_per_band is not None:
         print("Computing per-band structural spillage (xtal SOC vs amor)...")
