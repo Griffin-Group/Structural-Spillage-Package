@@ -35,11 +35,11 @@ strongly.
 Three variants are available, differing in which reference bands and which comparison
 subspace are used:
 
-| Flag | Reference bands ($\psi_n$) | Comparison subspace ($\psi_m$) | Requires |
-|---|---|---|---|
-| `--out-per-band` | `--xtal-sc` (SOC) | `--amor-sc` | — |
-| `--out-per-band-nosoc` | `--xtal-sc-nosoc`, trivially embedded as $[\psi_n, 0]$ | `--amor-sc` | `--xtal-sc-nosoc` |
-| `--out-per-band-nosoc-soc` | `--xtal-sc-nosoc`, trivially embedded as $[\psi_n, 0]$ | `--amor-soc` | `--xtal-sc-nosoc`, `--amor-soc` |
+| Flag | Reference bands ($\psi_n$) | Comparison subspace ($\psi_m$) | Requires | Corresponds to |
+|---|---|---|---|---|
+| `--out-per-band` | `--xtal-sc` (SOC) | `--amor-sc` | — | Per-band breakdown of the main $\gamma_{\mathrm{qB}}(\mathbf{k})$ / `--out-spillage` |
+| `--out-per-band-nosoc` | `--xtal-sc-nosoc`, trivially embedded as $[\psi_n, 0]$ | `--amor-sc` | `--xtal-sc-nosoc` | Isolates the structure/disorder axis from SOC entirely — both sides noSOC |
+| `--out-per-band-nosoc-soc` | `--xtal-sc-nosoc`, trivially embedded as $[\psi_n, 0]$ | `--amor-soc` | `--xtal-sc-nosoc`, `--amor-soc` | Crystal noSOC vs. disordered+SOC — mixes the structure and SOC axes into one comparison |
 
 ## Spin-orbit plane-wave spillage (Appendix D)
 A different quantity from $\gamma_{\mathrm{qB}}(\mathbf{k})$ above, despite the similar form.
@@ -132,3 +132,15 @@ python structural_spillage.py \
 
 Deep valence bands score lowest (least impacted SOC/noSOC and crystal/disorder); states nearest $E_F$ score highest, as
 expected for the bands most reshaped by disorder and SOC. 
+
+## Plotting
+`plot_per_band.py` plots any of the per-band txt files above (energy vs gamma), one PNG per
+input file, saved alongside each input by default:
+
+```
+python plot_per_band.py tests/bi_smoke/per_band_struct_soc_nsoc.txt tests/bi_smoke/per_band_sopw.txt
+```
+
+Pass `--efermi <value>` to draw a dashed reference line at $E_F$, and `--out-dir` to write the
+PNGs elsewhere. It only reads the `energy_eV`/`gamma_*` columns — the `w_k*`/`dominant_k`
+unfolding detail in each file isn't plotted.
