@@ -8,6 +8,19 @@ can be decomposed into UC k-point blocks for spillage.
 import numpy as np
 
 
+def unfold_onto_uc(uc, sc, verbose=True):
+    """`match_uc_to_sc` for a loaded UCKmesh and gamma-only SCWavecarData.
+
+    Returns (sortidx, index_list).
+    """
+    # SC gamma-point G+k vectors, Cartesian, in the SC's own reciprocal
+    # lattice (match_uc_to_sc expects both sets in the same basis)
+    p_sc = sc.Gpoints_gamma @ sc.b + sc.kpoint_gamma @ sc.b
+    sortidx, index_list, _ = match_uc_to_sc(p_sc, uc.p_full, sc.b, uc.index_list,
+                                            sc.n_pw_gamma, verbose=verbose)
+    return sortidx, index_list
+
+
 def match_uc_to_sc(p_amorph, p_full_uc, b_sc, index_list, n_pw_sc, verbose=True):
     """Match UC plane waves to SC plane waves via integer Miller indices.
 

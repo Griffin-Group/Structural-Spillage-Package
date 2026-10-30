@@ -1,15 +1,63 @@
 """Compute structural spillage between two supercell WAVECARs, unfolded
-onto the crystalline UC k-mesh.
+onto the crystalline UC k-mesh, and the Appendix D spin-orbit plane-wave
+spillage.
+
+Functions here return arrays; writing output files is left to the caller
+(see cli.py).
 """
 
-import argparse
+from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
 
-from kmatching import match_uc_to_sc
-from utils import _detect_N, orth
-from wavecar_io import (first_kpoint_coeffs, load_sc_wavecar, load_uc_kmesh,
-                         select_gamma_coeffs)
+from .kmatching import unfold_onto_uc
+from .utils import _detect_N, orth
+from .wavecar_io import (SCWavecarData, UCKmesh, first_kpoint_coeffs, load_sc_wavecar,
+                         load_uc_kmesh, select_gamma_coeffs)
+
+
+@dataclass
+class Inputs:
+    """Loaded WAVECARs plus the UC -> SC plane-wave unfolding indices."""
+    uc: UCKmesh
+    xtal: SCWavecarData
+    amor: SCWavecarData
+    sortidx: np.ndarray
+    index_list: list
+    xtal_nosoc: Optional[SCWavecarData] = None
+    amor_soc: Optional[SCWavecarData] = None
+
+
+@dataclass
+class PerBand:
+    """Per-band spillage of individual reference bands against a comparison subspace."""
+    energies: np.ndarray
+    gamma: np.ndarray
+    band_k_weight: np.ndarray   # (n_bands, n_uc_k) raw PW weight of each band per UC k-block
+    dominant_k: np.ndarray
+
+
+@dataclass
+class SpillageResult:
+    spillage: np.ndarray        # gamma_qB(k), one per UC k-point
+    nocc: np.ndarray            # N_occ(k) = Tr_k[P_xtal]
+    per_band: Optional[PerBand] = None
+    per_band_nosoc: Optional[PerBand] = None
+    per_band_nosoc_soc: Optional[PerBand] = None
+
+    @property
+    def normalized(self):
+        """Spillage per UC k-point normalized by N_occ(k), roughly in [0,1]."""
+        return self.spillage / self.nocc
+
+
+@dataclass
+class SopwResult:
+    gamma_pw: np.ndarray        # gamma_sopw(G), in SC plane-wave order
+    total: float
+    normalized: float           # total / N_occ
+    per_band: Optional[PerBand] = None
 
 
 def _ncl_occ_ortho_basis(sc, n_pw):
@@ -44,8 +92,7 @@ def _trivial_embed_nosoc_bands(sc, n_pw):
     return bands, sc.energies[occ_bands]
 
 
-def per_band_structural_spillage(bands_raw, energies, amor_ortho, sortidx, index_list,
-                                  out_path, gamma_label):
+def per_band_structural_spillage(bands_raw, energies, amor_ortho, sortidx, index_list):
     """Per-band structural spillage of individual `bands_raw` against the
     occupied-subspace projector spanned by `amor_ortho`.
 
@@ -59,9 +106,6 @@ def per_band_structural_spillage(bands_raw, energies, amor_ortho, sortidx, index
     norm is < 1). The per-UC-k weight columns instead use the *raw*
     (unnormalized) PW magnitudes, so they preserve that PW-completeness
     information rather than rescaling every band to unit weight.
-
-    Writes `out_path`: rows = bands (input order), columns =
-    [energy_eV, gamma_label, w_k0, w_k1, ..., dominant_k].
     """
     n_bands = bands_raw.shape[0]
     bands_sorted = bands_raw[:, :, sortidx]
@@ -80,101 +124,24 @@ def per_band_structural_spillage(bands_raw, energies, amor_ortho, sortidx, index
         start += l
     dominant_k = np.argmax(band_k_weight, axis=1)
 
-    k_hdr = '  '.join(f'w_k{i}' for i in range(len(index_list)))
-    out = np.column_stack([energies, gamma, band_k_weight, dominant_k])
-    np.savetxt(out_path, out, header=f'energy_eV  {gamma_label}  {k_hdr}  dominant_k')
-    print(f"  Saved to {out_path}  ({n_bands} bands)")
-
-    top10 = np.argsort(gamma)[::-1][:10]
-    print(f"  Top 10 bands by {gamma_label}:")
-    print(f"  {'band':>5}  {'energy(eV)':>12}  {gamma_label:>16}  {'dom_k':>6}")
-    for n in top10:
-        print(f"  {n:>5}  {energies[n]:>12.4f}  {gamma[n]:>16.4f}  {dominant_k[n]:>6}")
-    return gamma, dominant_k
+    return PerBand(energies=energies, gamma=gamma, band_k_weight=band_k_weight, dominant_k=dominant_k)
 
 
-def parse_args():
-    p = argparse.ArgumentParser(
-        description='Compute structural spillage between two supercell WAVECARs, '
-                     'unfolded onto the crystalline UC k-mesh.')
-
-    required = p.add_argument_group('required inputs')
-    required.add_argument('--xtal-sc', required=True,
-                           help='Crystalline supercell WAVECAR (SOC, gamma-only); defines the reference occupied subspace')
-    required.add_argument('--amor-sc', required=True,
-                           help='Amorphous (or second crystalline) supercell WAVECAR (noSOC by default, gamma-only); '
-                                'add --amor-ncl if this is also an SOC WAVECAR')
-    required.add_argument('--xtal-uc', required=True,
-                           help='Crystalline unit cell WAVECAR (N1×N2×N3 k-mesh); defines unit cell k-point blocks for unfolding')
-
-    soc = p.add_argument_group('SOC handling / optional WAVECARs')
-    soc.add_argument('--uc-soc', action='store_true',
-                      help='Treat --xtal-uc as an SOC WAVECAR (vasp_type=ncl). '
-                           'Default is std (noSOC). Only Gpoints and kpoints are read from UC — '
-                           'both formats give identical G-vectors.')
-    soc.add_argument('--amor-ncl', action='store_true',
-                      help='Treat --amor-sc as an SOC WAVECAR; uses native spinors instead of trivial embedding')
-    soc.add_argument('--amor-soc', default=None,
-                      help='Amorphous SOC WAVECAR (SOC, gamma-only); enables Appendix D spin-orbit PW spillage')
-    soc.add_argument('--xtal-sc-nosoc', default=None,
-                      help='Crystalline noSOC SC WAVECAR (std, gamma-only). When provided, also computes '
-                           'xtal-noSOC vs amor-noSOC and xtal-noSOC vs amor-SOC per-band overlaps.')
-
-    outputs = p.add_argument_group('output files')
-    outputs.add_argument('--out-spillage', default='spillage.txt',
-                          help='Output: raw spillage per UC k-point')
-    outputs.add_argument('--out-norm-spillage', default='spillage_norm.txt',
-                          help='Output: spillage per UC k-point normalized by N_occ(k) — '
-                               'fraction of the occupied subspace not reproduced, roughly in [0,1]')
-    outputs.add_argument('--out-sopw', default='sopw_spillage.txt',
-                          help='Output: per-PW spin-orbit spillage (Appendix D, only written if --amor-soc is given)')
-    outputs.add_argument('--out-norm-sopw', default='sopw_norm.txt',
-                          help='Output: scalar normalized sopw = total_sopw / N_occ (Appendix D)')
-    outputs.add_argument('--out-per-band-sopw', default=None,
-                          help='Output: per-band spin-orbit spillage — rows are amor SOC bands, '
-                               'columns are [energy_eV, gamma_sopw]. '
-                               'gamma_n = 1 - sum_m |<psi_SOC_n | psi_noSOC_m>|^2; '
-                               'high gamma near E_F signals band inversion.')
-    outputs.add_argument('--out-per-band', default=None,
-                          help='Output: per-band structural spillage — rows are xtal SOC bands, '
-                               'columns are [energy_eV, gamma_struct, w_k0, w_k1, ..., dominant_k]. '
-                               'gamma_n = 1 - sum_m |<psi_xtal_n/||psi_xtal_n|| | psi_amor_m>|^2; '
-                               'high gamma means that xtal band is not representable in the amorphous subspace.')
-    outputs.add_argument('--out-per-band-nosoc', default=None,
-                          help='Output: per-band structural spillage, xtal noSOC vs amor noSOC. '
-                               'gamma_n = 1 - sum_m |<[psi_n,0]/||psi_n|| | a_nsoc_m>|^2. '
-                               'Requires --xtal-sc-nosoc.')
-    outputs.add_argument('--out-per-band-nosoc-soc', default=None,
-                          help='Output: per-band structural spillage, xtal noSOC vs amor SOC. '
-                               'gamma_n = 1 - sum_m |<[psi_n,0]/||psi_n|| | a_soc_m>|^2. '
-                               'Requires --xtal-sc-nosoc and --amor-soc.')
-
-    supercell = p.add_argument_group('supercell size overrides')
-    supercell.add_argument('--n1', type=int, default=None,
-                            help='Supercell repeat along a1 (auto-detected from UC k-points if omitted)')
-    supercell.add_argument('--n2', type=int, default=None,
-                            help='Supercell repeat along a2 (auto-detected from UC k-points if omitted)')
-    supercell.add_argument('--n3', type=int, default=None,
-                            help='Supercell repeat along a3 (auto-detected from UC k-points if omitted)')
-
-    return p.parse_args()
-
-
-def load_inputs(args):
+def load_inputs(xtal_uc, xtal_sc, amor_sc, *, uc_soc=False, amor_ncl=False, amor_soc=None,
+                xtal_sc_nosoc=None, n1=None, n2=None, n3=None):
     """Load the UC k-mesh and all SC WAVECARs, run sanity diagnostics, and
     match UC plane waves onto the amorphous SC's plane-wave ordering.
 
-    Returns (uc, amor, xtal, xtal_nosoc, amor_soc, sortidx, index_list, N_OCC, N_OCC_SOC).
-    `xtal_nosoc` is None unless --xtal-sc-nosoc was given.
-    `amor_soc` is None unless --amor-soc was given.
+    Arguments mirror the CLI flags (--xtal-uc, --xtal-sc, ...); `amor_soc`
+    and `xtal_sc_nosoc` are optional WAVECAR paths.
     """
 
     # ── load UC k-mesh ────────────────────────────────────────────────────
     print("Loading UC WAVECAR...")
-    uc = load_uc_kmesh(args.xtal_uc, vasp_type='ncl' if args.uc_soc else 'std')
-    N1 = _detect_N(uc.kpoints[:, 0], args.n1)
-    N2 = _detect_N(uc.kpoints[:, 1], args.n2)
-    N3 = _detect_N(uc.kpoints[:, 2], args.n3)
+    uc = load_uc_kmesh(xtal_uc, vasp_type='ncl' if uc_soc else 'std')
+    N1 = _detect_N(uc.kpoints[:, 0], n1)
+    N2 = _detect_N(uc.kpoints[:, 1], n2)
+    N3 = _detect_N(uc.kpoints[:, 2], n3)
     print(f"  Supercell repeats: N1={N1}, N2={N2}, N3={N3}")
     b_amorph = np.array([uc.b[0] / N1, uc.b[1] / N2, uc.b[2] / N3])
     print(f"  UC k-points ({len(uc.kpoints)}): first few = "
@@ -182,35 +149,35 @@ def load_inputs(args):
     print(f"  UC pw at gamma (k-pt 0): {uc.n_pw_gamma}")
 
     # ── load SC WAVECARs (xtal-SC, amor-SC, optional xtal-SC-noSOC) ───────
-    print(f"Loading SC B WAVECAR ({'SOC/ncl' if args.amor_ncl else 'noSOC/std'})...")
-    amor = load_sc_wavecar(args.amor_sc, vasp_type='ncl' if args.amor_ncl else 'std')
+    print(f"Loading SC B WAVECAR ({'SOC/ncl' if amor_ncl else 'noSOC/std'})...")
+    amor = load_sc_wavecar(amor_sc, vasp_type='ncl' if amor_ncl else 'std')
     print(f"  noSOC gap: {amor.gap * 1000:.1f} meV")
     if amor.gap < 0.01:
         print(f"WARNING: noSOC system gap too small ({amor.gap * 1000:.1f} meV) — system may not be insulating")
     print(f"  SC_amor pw at gamma: {amor.n_pw_gamma}")
 
     print("Loading SOC SC WAVECAR (largest)...")
-    xtal = load_sc_wavecar(args.xtal_sc, vasp_type='ncl')
+    xtal = load_sc_wavecar(xtal_sc, vasp_type='ncl')
     print(f"  SOC gap: {xtal.gap * 1000:.1f} meV")
     assert xtal.gap > 0.01, f"SOC system gap too small ({xtal.gap:.4f} eV) — may not be insulating"
     print(f"  SC_xtal pw at gamma: {xtal.n_pw_gamma}")
 
     xtal_nosoc = None
-    if args.xtal_sc_nosoc is not None:
+    if xtal_sc_nosoc is not None:
         print("Loading noSOC xtal SC WAVECAR...")
-        xtal_nosoc = load_sc_wavecar(args.xtal_sc_nosoc, vasp_type='std')
+        xtal_nosoc = load_sc_wavecar(xtal_sc_nosoc, vasp_type='std')
         print(f"  noSOC xtal gap: {xtal_nosoc.gap * 1000:.1f} meV")
         assert xtal_nosoc.gap > 0.01, f"noSOC xtal gap too small ({xtal_nosoc.gap:.4f} eV)"
         assert xtal_nosoc.n_pw_gamma == xtal.n_pw_gamma, \
             f"noSOC xtal n_pw ({xtal_nosoc.n_pw_gamma}) != SOC xtal n_pw ({xtal.n_pw_gamma}) — check ENCUT"
 
-    amor_soc = None
-    if args.amor_soc is not None:
+    amor_soc_data = None
+    if amor_soc is not None:
         print("Loading amor SOC SC WAVECAR...")
-        amor_soc = load_sc_wavecar(args.amor_soc, vasp_type='ncl')
-        print(f"  amor SOC gap: {amor_soc.gap * 1000:.1f} meV")
-        assert amor_soc.n_pw_gamma == xtal.n_pw_gamma, \
-            f"amor SOC n_pw ({amor_soc.n_pw_gamma}) != xtal n_pw ({xtal.n_pw_gamma}) — check ENCUT"
+        amor_soc_data = load_sc_wavecar(amor_soc, vasp_type='ncl')
+        print(f"  amor SOC gap: {amor_soc_data.gap * 1000:.1f} meV")
+        assert amor_soc_data.n_pw_gamma == xtal.n_pw_gamma, \
+            f"amor SOC n_pw ({amor_soc_data.n_pw_gamma}) != xtal n_pw ({xtal.n_pw_gamma}) — check ENCUT"
 
     N_OCC = int(round(np.sum(amor.occs)))
     N_OCC_SOC = int(round(np.sum(xtal.occs)))
@@ -235,27 +202,36 @@ def load_inputs(args):
         f"SC xtal ({xtal.n_pw_gamma}) != SC amor ({amor.n_pw_gamma}) — incompatible calculations"
 
     # ── match UC plane waves onto SC plane waves ───────────────────────────
-    # p_amorph: SC gamma-point G+k vectors, Cartesian (uses the amorphous
-    # SC's own reciprocal lattice, matching kmatching's expectation that
-    # both p_amorph and p_full are expressed in the same basis).
-    p_amorph = amor.Gpoints_gamma @ amor.b + amor.kpoint_gamma @ amor.b
-    sortidx, index_list, n_matched = match_uc_to_sc(
-        p_amorph, uc.p_full, amor.b, uc.index_list, xtal.n_pw_gamma)
+    sortidx, index_list = unfold_onto_uc(uc, amor)
 
-    return uc, amor, xtal, xtal_nosoc, amor_soc, sortidx, index_list, N_OCC, N_OCC_SOC
+    return Inputs(uc=uc, xtal=xtal, amor=amor, sortidx=sortidx, index_list=index_list,
+                  xtal_nosoc=xtal_nosoc, amor_soc=amor_soc_data)
 
 
-def compute_structural_spillage(amor, xtal, sortidx, index_list, uc_kpoints, N_OCC, N_OCC_SOC, args,
-                                 xtal_nosoc=None, amor_soc=None):
+def compute_structural_spillage(amor, xtal, sortidx, index_list, *, uc_kpoints=None, amor_ncl=False,
+                                xtal_nosoc=None, amor_soc=None,
+                                per_band=False, per_band_nosoc=False, per_band_nosoc_soc=False):
     """Build the occupied-subspace spinor bases and compute the structural
     spillage (eq 45) via a full matrix-product sum over UC k-blocks.
 
     This is the tool's namesake quantity. Not to be confused with the
-    Appendix D "spin-orbit plane-wave spillage" (sopw) computed elsewhere,
+    Appendix D "spin-orbit plane-wave spillage" (sopw, `compute_sopw`),
     which compares SOC vs noSOC states within the amorphous system alone.
-    Writes `args.out_spillage` and returns `qB_spillage` (raw spillage per
-    UC k-point, in the same order as `uc_kpoints`/`index_list`).
+
+    `uc_kpoints` is only used to report the Gamma-point value. The per-band
+    flags select which per-band breakdowns to include in the result:
+    `per_band` (xtal SOC vs amor), `per_band_nosoc` (xtal noSOC vs amor,
+    needs `xtal_nosoc`), `per_band_nosoc_soc` (xtal noSOC vs amor SOC, needs
+    `xtal_nosoc` and `amor_soc`).
     """
+    if per_band_nosoc and xtal_nosoc is None:
+        raise ValueError("per_band_nosoc requires xtal_nosoc")
+    if per_band_nosoc_soc and (xtal_nosoc is None or amor_soc is None):
+        raise ValueError("per_band_nosoc_soc requires xtal_nosoc and amor_soc")
+
+    N_OCC = int(round(np.sum(amor.occs)))
+    N_OCC_SOC = int(round(np.sum(xtal.occs)))
+
     print("Building coefficient matrices...")
     n_pw = xtal.n_pw_gamma   # SC SOC G-point count (ncl stores same n_pw as std)
     vsa  = 2 * n_pw
@@ -265,10 +241,10 @@ def compute_structural_spillage(amor, xtal, sortidx, index_list, uc_kpoints, N_O
 
     # SC B spinor basis:
     #   noSOC (default): trivially embed std bands as [ψ,0] and [0,ψ] → 2×N_OCC spinors
-    #   SOC (--amor-ncl): use native ncl spinors directly → N_OCC_B spinors
-    print(f"  Building SC B spinor basis ({'native NCL spinors' if args.amor_ncl else 'trivial embedding'})...")
+    #   SOC (amor_ncl): use native ncl spinors directly → N_OCC_B spinors
+    print(f"  Building SC B spinor basis ({'native NCL spinors' if amor_ncl else 'trivial embedding'})...")
     occ_bands_nsoc = np.where(amor.occs == 1.0)[0]
-    if args.amor_ncl:
+    if amor_ncl:
         # ncl WAVECAR: coeff_a[0] shape (n_bands, 2*n_pw); each band is a flattened 2-spinor
         Vtriv = np.zeros((vsa, len(occ_bands_nsoc)), dtype=complex)
         for idx, n1 in enumerate(occ_bands_nsoc):
@@ -362,44 +338,37 @@ def compute_structural_spillage(amor, xtal, sortidx, index_list, uc_kpoints, N_O
         qB_nocc.append(n_k)
         start += l
 
-    gamma_idx = int(np.argmin(np.linalg.norm(uc_kpoints, axis=1)))
-    print(f"  Γ-point spillage: {qB_spillage[gamma_idx]:.4f}  N_occ(Γ)={qB_nocc[gamma_idx]:.1f}")
-    np.savetxt(args.out_spillage, qB_spillage)
+    if uc_kpoints is not None:
+        gamma_idx = int(np.argmin(np.linalg.norm(uc_kpoints, axis=1)))
+        print(f"  Γ-point spillage: {qB_spillage[gamma_idx]:.4f}  N_occ(Γ)={qB_nocc[gamma_idx]:.1f}")
 
-    qB_norm = [s / n for s, n in zip(qB_spillage, qB_nocc)]
-    np.savetxt(args.out_norm_spillage, qB_norm)
+    result = SpillageResult(spillage=np.array(qB_spillage), nocc=np.array(qB_nocc))
 
-    if args.out_per_band is not None:
+    if per_band:
         print("Computing per-band structural spillage (xtal SOC vs amor)...")
         bands_raw = np.stack([coeff_c[j] for j in occ_bands_soc])   # (N_OCC_SOC, 2, n_pw), SC order
         energies = xtal.energies[occ_bands_soc]
-        per_band_structural_spillage(bands_raw, energies, a_nsoc_ortho, sortidx, index_list,
-                                      args.out_per_band, 'gamma_struct')
+        result.per_band = per_band_structural_spillage(bands_raw, energies, a_nsoc_ortho,
+                                                       sortidx, index_list)
 
-    if args.out_per_band_nosoc is not None:
-        if xtal_nosoc is None:
-            print("WARNING: --out-per-band-nosoc requires --xtal-sc-nosoc; skipping.")
-        else:
-            print("Computing per-band structural spillage (xtal noSOC vs amor noSOC)...")
-            bands_raw, energies = _trivial_embed_nosoc_bands(xtal_nosoc, n_pw)
-            per_band_structural_spillage(bands_raw, energies, a_nsoc_ortho, sortidx, index_list,
-                                          args.out_per_band_nosoc, 'gamma_struct_nosoc')
+    if per_band_nosoc:
+        print("Computing per-band structural spillage (xtal noSOC vs amor noSOC)...")
+        bands_raw, energies = _trivial_embed_nosoc_bands(xtal_nosoc, n_pw)
+        result.per_band_nosoc = per_band_structural_spillage(bands_raw, energies, a_nsoc_ortho,
+                                                             sortidx, index_list)
 
-    if args.out_per_band_nosoc_soc is not None:
-        if xtal_nosoc is None or amor_soc is None:
-            print("WARNING: --out-per-band-nosoc-soc requires --xtal-sc-nosoc and --amor-soc; skipping.")
-        else:
-            print("Computing per-band structural spillage (xtal noSOC vs amor SOC)...")
-            bands_raw, energies = _trivial_embed_nosoc_bands(xtal_nosoc, n_pw)
-            amor_soc_ortho, _ = _ncl_occ_ortho_basis(amor_soc, n_pw)
-            amor_soc_ortho = amor_soc_ortho[:, :, sortidx]
-            per_band_structural_spillage(bands_raw, energies, amor_soc_ortho, sortidx, index_list,
-                                          args.out_per_band_nosoc_soc, 'gamma_struct_nosoc_soc')
+    if per_band_nosoc_soc:
+        print("Computing per-band structural spillage (xtal noSOC vs amor SOC)...")
+        bands_raw, energies = _trivial_embed_nosoc_bands(xtal_nosoc, n_pw)
+        amor_soc_ortho, _ = _ncl_occ_ortho_basis(amor_soc, n_pw)
+        amor_soc_ortho = amor_soc_ortho[:, :, sortidx]
+        result.per_band_nosoc_soc = per_band_structural_spillage(bands_raw, energies, amor_soc_ortho,
+                                                                 sortidx, index_list)
 
-    return qB_spillage
+    return result
 
 
-def compute_sopw(amor, amor_soc, sortidx, index_list, args):
+def compute_sopw(amor, amor_soc, sortidx, index_list, *, per_band=False):
     """Appendix D spin-orbit plane-wave spillage: compares the occupied
     subspaces of --amor-soc and --amor-sc (noSOC) — SOC on/off calculations
     of the SAME structure — with no UC k-block restriction, unlike
@@ -407,9 +376,9 @@ def compute_sopw(amor, amor_soc, sortidx, index_list, args):
     structures and restricts cross terms to matching UC k-blocks. See the
     README for the full derivation of why these are different quantities.
 
-    Writes `args.out_sopw` (per plane wave) and `args.out_norm_sopw`
-    (scalar, total/N_occ). If `args.out_per_band_sopw` is set, also writes
-    the band-resolved version via `per_band_structural_spillage`.
+    `sortidx`/`index_list` are only used for the per-band breakdown
+    (`per_band=True`), which compares individual amor SOC bands against the
+    amor noSOC subspace.
     """
     print("\n── Appendix D: spin-orbit plane-wave spillage ──────────────────────────")
     n_pw = amor.n_pw_gamma
@@ -482,26 +451,12 @@ def compute_sopw(amor, amor_soc, sortidx, index_list, args):
 
     print(f"  Spin-orbit PW spillage (Appendix D): {total_sopw:.6f}")
     print(f"  Normalized sopw (total / N_occ): {norm_sopw:.6f}  (max=1 if SOC fully reshapes subspace)")
-    np.savetxt(args.out_sopw, gamma_sopw)
-    np.savetxt(args.out_norm_sopw, [norm_sopw])
 
-    if args.out_per_band_sopw is not None:
+    result = SopwResult(gamma_pw=gamma_sopw, total=total_sopw, normalized=norm_sopw)
+
+    if per_band:
         print("Computing per-band spin-orbit spillage...")
-        per_band_structural_spillage(soc_raw, soc_energies, P_nsoc[:, :, sortidx], sortidx, index_list,
-                                      args.out_per_band_sopw, 'gamma_sopw')
+        result.per_band = per_band_structural_spillage(soc_raw, soc_energies, P_nsoc[:, :, sortidx],
+                                                       sortidx, index_list)
 
-    return gamma_sopw
-
-
-def main():
-    args = parse_args()
-    uc, amor, xtal, xtal_nosoc, amor_soc, sortidx, index_list, N_OCC, N_OCC_SOC = load_inputs(args)
-    compute_structural_spillage(amor, xtal, sortidx, index_list, uc.kpoints, N_OCC, N_OCC_SOC, args,
-                                 xtal_nosoc=xtal_nosoc, amor_soc=amor_soc)
-
-    if amor_soc is not None:
-        compute_sopw(amor, amor_soc, sortidx, index_list, args)
-
-
-if __name__ == '__main__':
-    main()
+    return result

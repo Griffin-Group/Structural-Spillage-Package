@@ -10,7 +10,7 @@ $$
 \gamma_{\mathrm{qB}}(\mathbf{k}) = \frac{1}{2}\left\lbrace \left[\sum_{G\alpha} P^{\alpha\alpha}_{\mathbf{k+G},\mathbf{k+G}}\right] + \tilde{n}_{\mathrm{occ}}(\mathbf{k}) - \sum_{G\alpha}\sum_{G'\beta}\left[P^{\alpha\beta}_{\mathbf{k+G},\mathbf{k+G'}}\tilde{P}^{\beta\alpha}_{\mathbf{k+G'},\mathbf{k+G}} + \tilde{P}^{\alpha\beta}_{\mathbf{k+G},\mathbf{k+G'}}P^{\beta\alpha}_{\mathbf{k+G'},\mathbf{k+G}}\right] \right\rbrace
 $$
 
-where $P$ is the occupied-subspace projector of the crystalline reference (`--xtal-sc`) and $\tilde{P}$ is the projector of the comparison system (`--amor-sc`), both expressed in the plane-wave basis and unfolded onto the UC k-mesh (`--xtal-uc`). This is implemented in `compute_structural_spillage` in `structural_spillage.py`: `p4` is $\sum_{G\alpha} P^{\alpha\alpha}$, `aa` is $\tilde{n}_{\mathrm{occ}}(\mathbf{k})$, and `p1`/`p2` are the two cross terms $P\tilde{P}$ and $\tilde{P}P$.
+where $P$ is the occupied-subspace projector of the crystalline reference (`--xtal-sc`) and $\tilde{P}$ is the projector of the comparison system (`--amor-sc`), both expressed in the plane-wave basis and unfolded onto the UC k-mesh (`--xtal-uc`). This is implemented in `compute_structural_spillage` in `src/structural_spillage/spillage.py`: `p4` is $\sum_{G\alpha} P^{\alpha\alpha}$, `aa` is $\tilde{n}_{\mathrm{occ}}(\mathbf{k})$, and `p1`/`p2` are the two cross terms $P\tilde{P}$ and $\tilde{P}P$.
 
 $\gamma_{\mathrm{qB}}(\mathbf{k})$ itself (the structural spillage from the paper), the
 per-band structural spillage, and the spin-orbit plane-wave spillage (Appendix D, aggregate
@@ -60,10 +60,33 @@ was included. The total spin-orbit spillage is $\sum_{\mathbf{G}} \gamma_{\mathr
 `--amor-soc` bands, columns `[energy_eV, gamma_sopw, w_k0, ..., dominant_k]` — if that flag
 is set, comparing individual `--amor-soc` bands against the `--amor-sc` subspace.
 
-## Requirements
-Python 3.9+ (uses the walrus operator). Install dependencies with:
+## Installation
+Python 3.9+. From the repo root:
 ```
-pip install -r requirements.txt
+pip install -e .            # or: pip install -e ".[test]" to also get pytest
+```
+This installs the `structural-spillage` and `plot-per-band` commands
+(`python -m structural_spillage` also works). `structural-spillage --help` lists all flags.
+
+The computations can also be called from Python; they return arrays instead of writing files:
+```python
+from structural_spillage import load_inputs, compute_structural_spillage
+
+inp = load_inputs("uc/WAVECAR", "supercell/WAVECAR", "dis/WAVECAR", uc_soc=True)
+res = compute_structural_spillage(inp.amor, inp.xtal, inp.sortidx, inp.index_list,
+                                  uc_kpoints=inp.uc.kpoints, per_band=True)
+res.spillage, res.normalized, res.per_band.gamma
+```
+
+## Tests
+```
+pytest
+```
+runs the synthetic tests (tiny fake wavefunctions with known spillage values, a few seconds,
+no WAVECARs needed). The real-WAVECAR tests below are skipped unless `SPILLAGE_TEST_DATA`
+points at the test data; they load several GB, so run them on a compute node:
+```
+SPILLAGE_TEST_DATA=test_data pytest tests/test_real_wavecars.py -v -s
 ```
 
 ## Test cases
@@ -76,7 +99,7 @@ We provide the commands to calculate structural spillage for Bismuthene bi-layer
 
 Run:
 ```
-python structural_spillage.py \
+structural-spillage \
   --xtal-uc  /global/cfs/cdirs/m4590/spillage_data/Bi_data/uc/2nd/WAVECAR \
   --uc-soc \
   --xtal-sc  /global/cfs/cdirs/m4590/spillage_data/Bi_data/supercell/WAVECAR \
@@ -94,7 +117,7 @@ SOC-driven band inversion at $\Gamma$ that makes Bi2Se3 a topological insulator.
 should yield the same value as pymatgen's spin orbit spillage.
 
 ```
-python structural_spillage.py \
+structural-spillage \
   --xtal-uc  test_data/r2scan_uc_nosoc/WAVECAR \
   --xtal-sc  /global/cfs/cdirs/m4590/spillage_data/DOS_crys_supercell/soc/WAVECAR \
   --amor-sc  /global/cfs/cdirs/m4590/spillage_data/DOS_crys_supercell/noSOC/WAVECAR \
@@ -113,7 +136,7 @@ covers all three per-band structural outputs, and — since `--amor-soc` is now 
   (generated via `submit_bi_dis_soc.sh`)
 
 ```
-python structural_spillage.py \
+structural-spillage \
   --xtal-uc       test_data/Bi_data/uc/2nd/WAVECAR \
   --uc-soc \
   --xtal-sc       test_data/Bi_data/supercell/WAVECAR \
@@ -134,11 +157,11 @@ Deep valence bands score lowest (least impacted SOC/noSOC and crystal/disorder);
 expected for the bands most reshaped by disorder and SOC. 
 
 ## Plotting
-`plot_per_band.py` plots any of the per-band txt files above (energy vs gamma), one PNG per
+`plot-per-band` plots any of the per-band txt files above (energy vs gamma), one PNG per
 input file, saved alongside each input by default:
 
 ```
-python plot_per_band.py tests/bi_smoke/per_band_struct_soc_nsoc.txt tests/bi_smoke/per_band_sopw.txt
+plot-per-band tests/bi_smoke/per_band_struct_soc_nsoc.txt tests/bi_smoke/per_band_sopw.txt
 ```
 
 Pass `--efermi <value>` to draw a dashed reference line at $E_F$, and `--out-dir` to write the

@@ -1,7 +1,4 @@
-from pymatgen.io.vasp.outputs import Wavecar
 import numpy as np
-import gc
-import argparse
 
 def orth(A):
     # orthoganlize a matrix A using SVD
