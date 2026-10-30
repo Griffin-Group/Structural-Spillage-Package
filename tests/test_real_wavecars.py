@@ -4,12 +4,11 @@ Each test checks the Gamma-point spillage against an independent value (the
 original spillage code for Bi, pymatgen's spin-orbit spillage for Bi2Se3),
 then compares the full output to the stored smoke-run results in reference/.
 
-Skipped unless SPILLAGE_TEST_DATA points at a directory laid out like
-test_data/ (Bi_data/, r2scan_uc_nosoc/, DOS_crys_supercell/). These load
-several GB of WAVECARs, so run them on a compute node, e.g.
+Skipped unless SPILLAGE_TEST_DATA points at the example WAVECAR directory
+(Bi_data/, r2scan_uc_nosoc/, DOS_crys_supercell/; see the paths below).
+These load several GB of WAVECARs, so run them on a compute node:
 
-    salloc -N 1 -C cpu -q interactive -t 30
-    SPILLAGE_TEST_DATA=test_data pytest tests/test_real_wavecars.py -v
+    SPILLAGE_TEST_DATA=/path/to/data pytest tests/test_real_wavecars.py -v -s
 """
 
 import os

@@ -84,26 +84,29 @@ pytest
 ```
 runs the synthetic tests (tiny fake wavefunctions with known spillage values, a few seconds,
 no WAVECARs needed). The real-WAVECAR tests below are skipped unless `SPILLAGE_TEST_DATA`
-points at the test data; they load several GB, so run them on a compute node:
+points at the example WAVECARs; they load several GB, so run them on a compute node:
 ```
-SPILLAGE_TEST_DATA=test_data pytest tests/test_real_wavecars.py -v -s
+SPILLAGE_TEST_DATA=$DATA pytest tests/test_real_wavecars.py -v -s
 ```
 
 ## Test cases
+The example WAVECARs are not included in this repo. In the commands below, replace `$DATA`
+with the directory holding your WAVECARs.
+
 ### Bismuthene bi-layer
 We provide the commands to calculate structural spillage for Bismuthene bi-layer for example.
 
-- `uc/2nd/WAVECAR` — crystalline unit cell, 5×5×1 k-mesh, SOC (`vasp_type=ncl`)
+- `uc/WAVECAR` — crystalline unit cell, 5×5×1 k-mesh, SOC (`vasp_type=ncl`)
 - `supercell/WAVECAR` — crystalline 50-atom supercell, gamma-only, SOC
 - `dis/WAVECAR` — the same supercell disordered (amorphized), gamma-only, noSOC
 
 Run:
 ```
 structural-spillage \
-  --xtal-uc  /global/cfs/cdirs/m4590/spillage_data/Bi_data/uc/2nd/WAVECAR \
+  --xtal-uc  $DATA/uc/WAVECAR \
   --uc-soc \
-  --xtal-sc  /global/cfs/cdirs/m4590/spillage_data/Bi_data/supercell/WAVECAR \
-  --amor-sc  /global/cfs/cdirs/m4590/spillage_data/Bi_data/dis/WAVECAR \
+  --xtal-sc  $DATA/supercell/WAVECAR \
+  --amor-sc  $DATA/dis/WAVECAR \
   --out-spillage tests/bi_smoke/spillage.txt
 ```
 `--uc-soc` is required because the UC WAVECAR was written with `LSORBIT=.TRUE.`.
@@ -118,9 +121,9 @@ should yield the same value as pymatgen's spin orbit spillage.
 
 ```
 structural-spillage \
-  --xtal-uc  test_data/r2scan_uc_nosoc/WAVECAR \
-  --xtal-sc  /global/cfs/cdirs/m4590/spillage_data/DOS_crys_supercell/soc/WAVECAR \
-  --amor-sc  /global/cfs/cdirs/m4590/spillage_data/DOS_crys_supercell/noSOC/WAVECAR \
+  --xtal-uc  $DATA/uc/WAVECAR \
+  --xtal-sc  $DATA/supercell_soc/WAVECAR \
+  --amor-sc  $DATA/supercell_nosoc/WAVECAR \
   --out-spillage tests/bi2se3_smoke/spillage.txt
 ```
 We confirm that the value at the $\Gamma$ point (2.7) matches pymatgen spin orbit spillage.
@@ -131,18 +134,16 @@ covers all three per-band structural outputs, and — since `--amor-soc` is now 
 `compute_sopw` runs automatically too, covering the Appendix D outputs in the same command:
 
 - `supercell_nosoc/WAVECAR` — noSOC on the same crystalline `supercell/` structure
-  (generated via `submit_bi_xtal_nosoc.sh` in `AmorphousTDA`)
 - `dis_soc/WAVECAR` — SOC on the same disordered `dis/` structure
-  (generated via `submit_bi_dis_soc.sh`)
 
 ```
 structural-spillage \
-  --xtal-uc       test_data/Bi_data/uc/2nd/WAVECAR \
+  --xtal-uc       $DATA/uc/WAVECAR \
   --uc-soc \
-  --xtal-sc       test_data/Bi_data/supercell/WAVECAR \
-  --xtal-sc-nosoc test_data/Bi_data/supercell_nosoc/WAVECAR \
-  --amor-sc       test_data/Bi_data/dis/WAVECAR \
-  --amor-soc      test_data/Bi_data/dis_soc/WAVECAR \
+  --xtal-sc       $DATA/supercell/WAVECAR \
+  --xtal-sc-nosoc $DATA/supercell_nosoc/WAVECAR \
+  --amor-sc       $DATA/dis/WAVECAR \
+  --amor-soc      $DATA/dis_soc/WAVECAR \
   --out-spillage           tests/bi_smoke/spillage.txt \
   --out-norm-spillage      tests/bi_smoke/spillage_norm.txt \
   --out-per-band           tests/bi_smoke/per_band_struct_soc_nsoc.txt \
